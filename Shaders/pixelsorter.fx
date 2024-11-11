@@ -216,8 +216,8 @@ void doubleThreshholdMaskAndValue(float4 pos : SV_Position,
     value = clamp(value, 0, 255);
 }
 
-// write the id(y of first pixel) of each consecutive span of pixels to a
-// texture one thread per column
+// write the id(y of first pixel) of each consecutive span of pixels to a texture
+// one thread per column
 void indexIds(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     if (id.x >= BUFFER_WIDTH) {
         return;
@@ -237,8 +237,7 @@ void indexIds(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
 }
 
 // step one of radix sort, frequency analysis
-// based on
-// https://gpuopen.com/download/publications/Introduction_to_GPU_Radix_Sort.pdf
+// based on: https://gpuopen.com/download/publications/Introduction_to_GPU_Radix_Sort.pdf
 // one thread per column * possible values (256)
 void radixCount(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     if (id.x >= BUFFER_WIDTH) {
@@ -258,8 +257,8 @@ void radixCount(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
 // first sum the counts stored before to get offsets
 // then use those offset to sort the pixels, increment an offset each time it is
 // used this pass does not actually sort the texture, but instead creates a
-// proxy that works as a sort of adress book of correct pixel locations one
-// thread per column
+// proxy that works as a sort of adress book of correct pixel locations
+// one thread per column
 void radixReorder(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     if (id.x >= BUFFER_WIDTH) {
         return;
@@ -299,7 +298,8 @@ void fullSorter(float4 pos : SV_Position,
 
 // using the span Id texture, write the pixels back to their span, keeping a sum
 // of the items added to each span as an additional offset this step currently
-// uses alot of memory and can likely be improved one thread per column
+// uses alot of memory and can likely be improved 
+// one thread per column
 void sortToSpans(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     if (id.x >= BUFFER_WIDTH) {
         return;
