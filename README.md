@@ -14,7 +14,6 @@ Other sources:
   https://en.wikipedia.org/wiki/Relative_luminance
 
 
-My first public code project, and my first project for reshade
 
 Likely still needs alot of optimization and cleanup
   
