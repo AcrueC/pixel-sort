@@ -246,9 +246,7 @@ void doubleThreshholdMaskAndValue(float4 pos : SV_Position,
             colorTotal += tex2Dfetch(samplerColor, pos + int2(ix,iy));
         }
     }
-    float4 color = colorTotal/ ((MaskPreBlur + 1) * (MaskPreBlur + 1));
-
-
+    float4 color = colorTotal/ ((2 * MaskPreBlur + 1) * (2 * MaskPreBlur + 1));
 
     float maskValue = luminance(color.rgb);
     mask = (maskValue >= LowThreshold && maskValue <= HighThreshold) ? 1 : 0;
@@ -283,11 +281,11 @@ void indexIds(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     }
 }
 
-// step one of radix sort, frequency analysis
+// radix sort
 // based on
 // https://gpuopen.com/download/publications/Introduction_to_GPU_Radix_Sort.pdf
 // one thread per column * possible values (256)
-void radixCount(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
+void radixSort(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     int thread_count = horizontal?BUFFER_HEIGHT:BUFFER_WIDTH;
     int thread_length = horizontal?BUFFER_WIDTH:BUFFER_HEIGHT;
     if (id.x >= thread_count) {
@@ -301,44 +299,26 @@ void radixCount(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
         int value = tex2Dfetch(samplerValue, coord).r;
         counts[value] += 1;
     }
-    for (int j = 0; j < 256; j++){
-        tex2Dstore(targetComputeOffset, int2(id.x, j), counts[j]);
-    }
-    
-}
 
-// first sum the counts stored before to get offsets
-// then use those offset to sort the pixels, increment an offset each time it is
-// used this pass does not actually sort the texture, but instead creates a
-// proxy that works as a sort of adress book of correct pixel locations
-// one thread per column
-void radixReorder(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
-    int thread_count = horizontal?BUFFER_HEIGHT:BUFFER_WIDTH;
-    int thread_length = horizontal?BUFFER_WIDTH:BUFFER_HEIGHT;
-    if (id.x >= thread_count) {
-        return;
-    }
-
-    int offsetSums[256];
     int sum = 0;
 
     for (int n = 0; n < 256; n++) {
-        int value = tex2Dfetch(samplerComputeOffset, int2(id.x, n)).r;
-        offsetSums[n] = sum;
+        int value = counts[n];
+        counts[n] = sum;
         sum = sum + value;
     }
 
     for (int i = 0; i < thread_length; i++) {
         int2 coord = horizontal?int2(i, id.x):int2(id.x, i);
         int value = tex2Dfetch(samplerValue, coord).r;
-        int offset = offsetSums[value];
+        int offset = counts[value];
         float fi = i / float(thread_length);
 
         int2 coord2 = horizontal?int2(offset, id.x):int2(id.x, offset);
         tex2Dstore(targetSortProxy, coord2, float4(fi, 0f, 0f, 1f));
 
         offset++;
-        offsetSums[value] = offset;
+        counts[value] = offset;
     }
 }
 
@@ -414,18 +394,10 @@ technique pixelSort {
         DispatchSizeX = 64;
         DispatchSizeY = 1;
         DispatchSizeZ = 1;
-        ComputeShader = radixCount<64, 1, 1>;
+        ComputeShader = radixSort<64, 1, 1>;
     }
 
-    pass p3 // radix Reorder
-    {
-        DispatchSizeX = 64;
-        DispatchSizeY = 1;
-        DispatchSizeZ = 1;
-        ComputeShader = radixReorder<64, 1, 1>;
-    }
-
-    pass p4 // full sorter
+    pass p3 // full sorter
     {
         VertexShader = PostProcessVS;
         PixelShader = fullSorter;
@@ -433,7 +405,7 @@ technique pixelSort {
         RenderTarget1 = texIDsOut;
     }
 
-    pass p5 // sort back to spans
+    pass p4 // sort back to spans 4ms *
     {
         DispatchSizeX = 64;
         DispatchSizeY = 1;
@@ -441,7 +413,7 @@ technique pixelSort {
         ComputeShader = sortToSpans<64, 1, 1>;
     }
 
-    pass p6 // write to back buffer
+    pass p5 // write to back buffer
     {
         VertexShader = PostProcessVS;
         PixelShader = flip;
