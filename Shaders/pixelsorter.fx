@@ -33,43 +33,24 @@ texture2D texValue {
 sampler2D samplerValue { Texture = texValue; };
 
 // texture of span ids before sorting
-texture2D texIDsInPos {
+texture2D texIDsIn {
     Width = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = R16;
 };
-sampler2D samplerIDsInPos { Texture = texIDsInPos; };
-storage2D targetIDsInPos {
-    Texture = texIDsInPos;
-    MipLevel = 0;
-};
-
-// texture of span ids before sorting
-texture2D texIDsInNeg {
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = R16;
-};
-sampler2D samplerIDsInNeg { Texture = texIDsInNeg; };
-storage2D targetIDsInNeg {
-    Texture = texIDsInNeg;
+sampler2D samplerIDsIn { Texture = texIDsIn; };
+storage2D targetIDsIn {
+    Texture = texIDsIn;
     MipLevel = 0;
 };
 
 // texture of span ids after sorting
-texture2D texIDsOutPos {
+texture2D texIDsOut {
     Width = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = R16;
 };
-sampler2D samplerIDsOutPos { Texture = texIDsOutPos; };
-
-texture2D texIDsOutNeg {
-    Width = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = R16;
-};
-sampler2D samplerIDsOutNeg { Texture = texIDsOutNeg; };
+sampler2D samplerIDsOut { Texture = texIDsOut; };
 
 // texture of image fully sorted
 texture2D texFullSorted {
@@ -82,7 +63,7 @@ sampler2D samplerFullSorted { Texture = texFullSorted; };
 texture2D texSortProxy {
     Width = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
-    Format = R32F;
+    Format = R16F;
 };
 sampler2D samplerSortProxy { Texture = texSortProxy; };
 storage2D targetSortProxy {
@@ -228,7 +209,7 @@ float switchValue(float3 color) {
 void doubleThreshholdMaskAndValue(float4 pos : SV_Position, 
         float2 texcoord : TEXCOORD0, 
         out float mask : SV_Target0, 
-        out float valueOut : SV_Target1) {
+        out float fvalue : SV_Target1) {
 
     float4 color = tex2D(samplerColor, texcoord);
     float maskValue = luminance(color.rgb);
@@ -236,11 +217,9 @@ void doubleThreshholdMaskAndValue(float4 pos : SV_Position,
     mask = (maskValue >= LowThreshold && maskValue <= HighThreshold) ? 1 : 0;
     mask = inverted ? 1 - mask : mask;
 
-    float fvalue = switchValue(color.rgb);
+    fvalue = switchValue(color.rgb);
 
     fvalue = reversed ? 1f - fvalue : fvalue;
-    int value = round(fvalue * 255f);
-    valueOut = float(value) / 255f;
 }
 
 // write the id(y of first pixel) of each consecutive span of pixels to a
@@ -253,21 +232,16 @@ void indexIds(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     }
 
     bool inSpan = false;
-    float spanId = id.y==1 ? float(thread_length) / 4095f: 0f;
+    float spanId = 0f;
 
     for (int i = 0; i < thread_length; i++) {
-        int j = id.y==1?(thread_length - 1) - i:i;
-        int2 coord = horizontal?int2(j, id.x):int2(id.x, j);
+        int2 coord = horizontal?int2(i, id.x):int2(id.x, i);
         float mask = tex2Dfetch(samplerMask, coord).r;
         bool masked = (mask > 0f);
 
-        spanId = (masked == inSpan) ? spanId : float(j) / 4095f;
+        spanId = (masked == inSpan) ? spanId : float(i) / 4095f;
         inSpan = masked;
-        if (id.y==1) {
-            tex2Dstore(targetIDsInNeg, coord, spanId);
-        } else {
-            tex2Dstore(targetIDsInPos, coord, spanId);
-        }
+        tex2Dstore(targetIDsIn, coord, spanId);
     }
 }
 
@@ -300,11 +274,13 @@ void radixSort(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
 
     for (int i = 0; i < thread_length; i++) {
         int2 coord = horizontal?int2(i, id.x):int2(id.x, i);
-        int value = round(tex2Dfetch(samplerValue, coord).r * 255);
+        int value = round(tex2Dfetch(samplerValue, coord).r * 255f);
         int offset = counts[value];
-        float fi = i / float(thread_length);
+
+        float fi = float(i) / 4095f;
 
         int2 coord2 = horizontal?int2(offset, id.x):int2(id.x, offset);
+
         tex2Dstore(targetSortProxy, coord2, float4(fi, 0f, 0f, 1f));
 
         offset++;
@@ -317,13 +293,12 @@ void radixSort(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
 void fullSorter(float4 pos : SV_Position, 
         float2 texcoord : TEXCOORD0, 
         out float4 color : SV_Target0, 
-        out float idPos : SV_Target1,
-        out float idNeg : SV_Target2) {
-    float target = tex2D(samplerSortProxy, texcoord).r;
-    float2 coord = horizontal?float2(target, texcoord.y):float2(texcoord.x, target);
-    color = tex2D(samplerColor, coord);
-    idPos = tex2D(samplerIDsInPos, coord).r;
-    idNeg = tex2D(samplerIDsInNeg, coord).r;
+        out float id : SV_Target1) {
+    int thread_length = horizontal?BUFFER_WIDTH:BUFFER_HEIGHT;
+    float target = tex2D(samplerSortProxy, texcoord).r * 4095f;
+    float2 coord = horizontal?int2(target, pos.y):float2(pos.x, target);
+    color = tex2Dfetch(samplerColor, coord);
+    id = tex2Dfetch(samplerIDsIn, coord).r;
 }
 
 // using the span Id texture, write the pixels back to their span, keeping a sum
@@ -340,16 +315,12 @@ void sortToSpans(uint3 id : SV_DispatchThreadID, uint3 tid : SV_GroupThreadID) {
     int spanOffsets[BUFFER_MAX];
     int sum = 0;
 
-    for (int i = 0; i < thread_length / 2; i++) {
-        int j = id.y==1?(thread_length - 1) - i:i;
-        int2 coord = horizontal?int2(j, id.x):int2(id.x, j);
-        float4 color = tex2Dfetch(samplerFullSorted, coord);
-        int spanId;
-        if (id.y==1) {
-            spanId = tex2Dfetch(samplerIDsOutNeg, coord).r * 4095;
-        } else {
-            spanId = tex2Dfetch(samplerIDsOutPos, coord).r * 4095;
-        }
+    for (int i = 0; i < thread_length; i++) {
+        int2 coord = horizontal?int2(i, id.x):int2(id.x, i);
+        float4 color = float4(tex2Dfetch(samplerFullSorted, coord).rgb , 1f);
+
+        int spanId = tex2Dfetch(samplerIDsOut, coord).r * 4095f;
+
         int offset = spanOffsets[spanId] + spanId;
 
         int2 coord2 = horizontal?int2(offset, id.x):int2(id.x, offset);
@@ -382,7 +353,7 @@ technique pixelSort {
     pass p1 // Index span Ids
     {
         DispatchSizeX = 64;
-        DispatchSizeY = 2;
+        DispatchSizeY = 1;
         DispatchSizeZ = 1;
         ComputeShader = indexIds<64, 1, 1>;
     }
@@ -400,14 +371,13 @@ technique pixelSort {
         VertexShader = PostProcessVS;
         PixelShader = fullSorter;
         RenderTarget0 = texFullSorted;
-        RenderTarget1 = texIDsOutPos;
-        RenderTarget2 = texIDsOutNeg;
+        RenderTarget1 = texIDsOut;
     }
 
     pass p5 // sort back to spans
     {
         DispatchSizeX = 64;
-        DispatchSizeY = 2;
+        DispatchSizeY = 1;
         DispatchSizeZ = 1;
         ComputeShader = sortToSpans<64, 1, 1>;
     }
